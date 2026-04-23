@@ -5,9 +5,8 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.robot import Robot
-from app.schemas import RobotRegisterRequest, RobotResponse, RobotHeartbeatRequest
+from app.schemas import RobotRegisterRequest, RobotResponse, RobotClaimRequest
 from app.services.robot_service import RobotService
-from app.utils import extract_ip_address, success_response, error_response
 
 router = APIRouter(prefix="/robots", tags=["robots"])
 
@@ -53,63 +52,16 @@ async def list_robots(
     return robots
 
 
-@router.post("/{robot_identifier}/heartbeat")
-async def robot_heartbeat(
-    robot_identifier: str,
-    request_data: RobotHeartbeatRequest,
-    http_request: Request,
+@router.post("/claim", response_model=RobotResponse)
+async def claim_robot(
+    request: RobotClaimRequest,
     db: Session = Depends(get_db),
 ):
-    """Record a heartbeat from robot"""
-    robot = RobotService.get_robot_by_id(db, robot_identifier)
-    if not robot:
-        raise HTTPException(status_code=404, detail="Robot not found")
-    
+    """Claim a robot for a user"""
     try:
-        robot = RobotService.record_heartbeat(db, robot)
-        return success_response(
-            data={"robot_id": robot.robot_id, "last_heartbeat": robot.last_heartbeat_at},
-            message="Heartbeat recorded successfully",
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Heartbeat recording failed: {str(e)}")
-
-
-@router.post("/{robot_identifier}/activate")
-async def activate_robot(
-    robot_identifier: str,
-    db: Session = Depends(get_db),
-):
-    """Activate a robot"""
-    robot = RobotService.get_robot_by_id(db, robot_identifier)
-    if not robot:
-        raise HTTPException(status_code=404, detail="Robot not found")
-    
-    try:
-        robot = RobotService.activate_robot(db, robot)
-        return success_response(
-            data={"robot_id": robot.robot_id, "status": robot.status.value},
-            message="Robot activated successfully",
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/{robot_identifier}/deactivate")
-async def deactivate_robot(
-    robot_identifier: str,
-    db: Session = Depends(get_db),
-):
-    """Deactivate a robot"""
-    robot = RobotService.get_robot_by_id(db, robot_identifier)
-    if not robot:
-        raise HTTPException(status_code=404, detail="Robot not found")
-    
-    try:
-        robot = RobotService.deactivate_robot(db, robot)
-        return success_response(
-            data={"robot_id": robot.robot_id, "status": robot.status.value},
-            message="Robot deactivated successfully",
-        )
+        robot = RobotService.claim_robot(db, request.robot_id, request.owner_id)
+        return robot
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
