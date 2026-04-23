@@ -1,15 +1,7 @@
 """Service module exports"""
 
-from app.services.robot_service import (
-    RobotService,
-    DeviceService,
-    AuthenticationService,
-)
-from app.services.fingerprint_service import FingerprintService
+from app.services.robot_service import RobotService
 
 __all__ = [
     "RobotService",
-    "DeviceService",
-    "AuthenticationService",
-    "FingerprintService",
 ]
