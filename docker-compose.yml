@@ -2,17 +2,18 @@ version: "3.9"
 
 services:
   db:
-    image: postgres:15
+    image: mysql:8.0
     environment:
-      POSTGRES_DB: identity_db
-      POSTGRES_USER: identity_user
-      POSTGRES_PASSWORD: identity_pass
+      MYSQL_DATABASE: identity_db
+      MYSQL_USER: identity_user
+      MYSQL_PASSWORD: identity_pass
+      MYSQL_ROOT_PASSWORD: root_pass
     ports:
-      - "5433:5432"
+      - "3310:3306"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U identity_user"]
+      test: ["CMD-SHELL", "mysqladmin ping -u identity_user -pidentity_pass"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -21,10 +22,10 @@ services:
   api:
     build: .
     environment:
-      SQLALCHEMY_DATABASE_URI: postgresql://identity_user:identity_pass@db:5432/identity_db
+      DATABASE_URL: mysql+pymysql://identity_user:identity_pass@db:3306/identity_db
       ENVIRONMENT: development
       LOG_LEVEL: INFO
-      CORS_ORIGINS: "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173"
+      CORS_ORIGINS: '["http://localhost:3000","http://localhost:5173","http://127.0.0.1:3000","http://127.0.0.1:5173"]'
     depends_on:
       db:
         condition: service_healthy
@@ -35,4 +36,4 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 volumes:
-  postgres_data:
+  mysql_data:
