@@ -24,7 +24,6 @@ class JWTTokenManager:
         self,
         robot_id: int,
         robot_identifier: str,
-        device_id: Optional[int] = None,
         additional_claims: Optional[Dict] = None,
     ) -> Tuple[str, str, datetime]:
         """
@@ -33,7 +32,6 @@ class JWTTokenManager:
         Args:
             robot_id: Database robot ID
             robot_identifier: Human-readable robot identifier (robot_id)
-            device_id: Optional device ID
             additional_claims: Additional claims to include in token
             
         Returns:
@@ -46,7 +44,6 @@ class JWTTokenManager:
         payload = {
             "sub": str(robot_id),
             "robot_id": robot_identifier,
-            "device_id": device_id,
             "type": "access",
             "jti": jti,
             "iat": now,
@@ -177,10 +174,6 @@ class JWTTokenManager:
     def get_robot_id_from_token(self, payload: Dict) -> Optional[str]:
         """Extract robot_id from token payload"""
         return payload.get("robot_id")
-
-    def get_device_id_from_token(self, payload: Dict) -> Optional[int]:
-        """Extract device_id from token payload"""
-        return payload.get("device_id")
 
     def get_jti_from_token(self, payload: Dict) -> Optional[str]:
         """Extract JTI (JWT ID) from token payload"""
