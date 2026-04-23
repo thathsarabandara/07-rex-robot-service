@@ -10,9 +10,6 @@ from app.database import Base, engine
 from app.routes import (
     health_router,
     robots_router,
-    devices_router,
-    auth_router,
-    fingerprints_router,
 )
 
 # Setup logging
@@ -60,9 +57,6 @@ def create_app() -> FastAPI:
     # Include routers
     app.include_router(health_router, prefix="/api")
     app.include_router(robots_router, prefix="/api")
-    app.include_router(devices_router, prefix="/api")
-    app.include_router(auth_router, prefix="/api")
-    app.include_router(fingerprints_router, prefix="/api")
     
     # Root endpoint
     @app.get("/")
