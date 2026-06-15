@@ -1,39 +1,19 @@
 version: "3.9"
 
 services:
-  db:
-    image: mysql:8.0
-    environment:
-      MYSQL_DATABASE: identity_db
-      MYSQL_USER: identity_user
-      MYSQL_PASSWORD: identity_pass
-      MYSQL_ROOT_PASSWORD: root_pass
-    ports:
-      - "3310:3306"
-    volumes:
-      - mysql_data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -u identity_user -pidentity_pass"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-      start_period: 30s
-
   api:
     build: .
-    environment:
-      DATABASE_URL: mysql+pymysql://identity_user:identity_pass@db:3306/identity_db
-      ENVIRONMENT: development
-      LOG_LEVEL: INFO
-      CORS_ORIGINS: '["http://localhost:3000","http://localhost:5173","http://127.0.0.1:3000","http://127.0.0.1:5173"]'
-    depends_on:
-      db:
-        condition: service_healthy
+    env_file:
+      - .env
     ports:
-      - "8001:8000"
+      - "9002:9002"
     volumes:
       - .:/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - rex_shared_network
 
-volumes:
-  mysql_data:
+networks:
+  rex_shared_network:
+    external: true
+    name: rex_shared_network
