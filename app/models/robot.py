@@ -39,8 +39,8 @@ class Robot(Base):
     robot_id = Column(String(64), unique=True, nullable=False, index=True)
     name = Column(String(255), nullable=False)
     model = Column(String(255), nullable=False)
-    serial_number = Column(String(255), unique=True, nullable=False, index=True)
-    owner_id = Column(String(64), nullable=True, index=True)
+    serial_key_hash = Column(String(255), nullable=False)
+    firmware_version = Column(String(50), nullable=True)
     status = Column(
         SQLEnum(RobotStatus),
         default=RobotStatus.ACTIVE,
@@ -54,5 +54,4 @@ class Robot(Base):
 
     __table_args__ = (
         UniqueConstraint("robot_id", name="uq_robot_id"),
-        UniqueConstraint("serial_number", name="uq_serial_number"),
     )

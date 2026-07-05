@@ -22,14 +22,16 @@ class RobotRegisterRequest(BaseModel):
     """Request model for robot registration"""
     name: str = Field(..., min_length=1, max_length=255, description="Robot name")
     model: str = Field(..., min_length=1, max_length=255, description="Robot model")
-    serial_number: str = Field(..., min_length=1, max_length=255, description="Serial number")
+    serial_key: str = Field(..., min_length=1, max_length=255, description="Serial key")
+    firmware_version: Optional[str] = Field(None, description="Firmware version")
 
     class Config:
         json_schema_extra = {
             "example": {
                 "name": "REX-001",
                 "model": "REX-Pro-v2",
-                "serial_number": "REX-SN-20240422-001",
+                "serial_key": "REX-SN-20240422-001",
+                "firmware_version": "v1.2.0"
             }
         }
 
@@ -40,8 +42,7 @@ class RobotResponse(BaseModel):
     robot_id: str
     name: str
     model: str
-    serial_number: str
-    owner_id: Optional[str] = None
+    firmware_version: Optional[str] = None
     status: RobotStatus
     created_at: datetime
 
@@ -49,10 +50,19 @@ class RobotResponse(BaseModel):
         from_attributes = True
 
 
-class RobotClaimRequest(BaseModel):
-    """Request model for claiming a robot"""
+class RobotPairRequest(BaseModel):
+    """Request model for pairing a robot"""
     robot_id: str = Field(..., description="Robot identifier")
-    owner_id: str = Field(..., description="User ID to bind the robot to")
+    serial_key: str = Field(..., description="Serial key for the robot")
+    user_id: str = Field(..., description="User ID pairing the robot")
+
+class RobotUpdate(BaseModel):
+    """Request model for updating a robot"""
+    name: Optional[str] = None
+
+class SuccessResponse(BaseModel):
+    """Standard success response"""
+    success: bool
 
 
 class RobotHeartbeatRequest(BaseModel):

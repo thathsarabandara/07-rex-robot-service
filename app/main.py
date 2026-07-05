@@ -58,6 +58,15 @@ def create_app() -> FastAPI:
     app.include_router(health_router, prefix="/api")
     app.include_router(robots_router, prefix="/api")
     
+    import os
+    from fastapi import Request
+    if os.getenv("ENV") == "dev" or os.getenv("NODE_ENV") == "development":
+        @app.middleware("http")
+        async def log_requests(request: Request, call_next):
+            logger.info(f"API Call: {request.method} {request.url}")
+            response = await call_next(request)
+            return response
+    
     # Root endpoint
     @app.get("/")
     async def root():
