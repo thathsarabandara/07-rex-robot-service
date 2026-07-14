@@ -1,16 +1,32 @@
-"""Robot Event model"""
+"""Robot Event model definition"""
 
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, JSON
+from enum import Enum as PyEnum
+from sqlalchemy import Column, String, Enum, DateTime, JSON, ForeignKey, func
+from sqlalchemy.orm import relationship
+
 from app.database import Base
-from app.models.robot import utcnow
+
+
+class EventSeverity(str, PyEnum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
 
 class RobotEvent(Base):
-    """Event log for robot operations"""
+    """Event logs emitted or received for a robot"""
     __tablename__ = "robot_events"
 
-    id = Column(Integer, primary_key=True, index=True)
-    robot_id = Column(Integer, ForeignKey("robots.id", ondelete="CASCADE"), nullable=False, index=True)
+    id = Column(String(36), primary_key=True)
+    robot_id = Column(String(36), ForeignKey("robots.id", ondelete="CASCADE"), nullable=False, index=True)
     event_type = Column(String(100), nullable=False)
+    
+    severity = Column(Enum(EventSeverity), default=EventSeverity.LOW, nullable=False)
+    source = Column(String(100), nullable=True)
     payload = Column(JSON, nullable=True)
     
-    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+
+    # Relationships
+    robot = relationship("Robot", back_populates="events")
