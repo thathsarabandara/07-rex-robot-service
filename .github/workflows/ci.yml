@@ -1,110 +1,200 @@
-name: CI Pipeline
+name: Python CI/CD — Robot Service
 
 on:
   push:
-    branches: [main, develop]
+    branches: [ "main" ]
   pull_request:
-    branches: [main, develop]
+    branches: [ "main" ]
 
 jobs:
-  lint:
+
+  checkout:
+    name: "1 · Checkout"
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+  environment:
+    name: "2 · Environment"
+    runs-on: ubuntu-latest
+    needs: checkout
+    steps:
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Print environment versions
+        run: |
+          python3 --version
+          pip3 --version
+          docker --version
+
+  install-dependencies:
+    name: "3 · Install Dependencies"
+    runs-on: ubuntu-latest
+    needs: environment
+    steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-
-      - name: Cache pip dependencies
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
+          python-version: "3.12"
+          cache: "pip"
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install flake8 black isort
+          pip install -r requirements.txt -r requirements-dev.txt
 
-      - name: Run isort check
-        run: isort --check-only app tests
-
-      - name: Run black format check
-        run: black --check app tests
-
-      - name: Run flake8 linting
-        run: flake8 app tests
+  lint:
+    name: "4 · Lint"
+    runs-on: ubuntu-latest
+    needs: install-dependencies
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run lint
+        run: |
+          ruff check .
+          mypy app
 
   test:
+    name: "5 · Test"
     runs-on: ubuntu-latest
+    needs: lint
     services:
-      postgres:
-        image: postgres:15
+      mysql:
+        image: mysql:8.4
         env:
-          POSTGRES_DB: test_identity_db
-          POSTGRES_USER: test_user
-          POSTGRES_PASSWORD: test_pass
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          MYSQL_DATABASE: rex_robot_test
+          MYSQL_USER: rex_user
+          MYSQL_PASSWORD: rex_password
+          MYSQL_ROOT_PASSWORD: root_password
         ports:
-          - 5432:5432
-
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot_password"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+    env:
+      APP_ENV: test
+      DEBUG: false
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: rex_robot_test
+      MYSQL_USER: rex_user
+      MYSQL_PASSWORD: rex_password
+      REDIS_URL: redis://127.0.0.1:6379/1
+      USER_JWT_SECRET_KEY: test-user-secret
+      USER_JWT_ALGORITHM: HS256
+      USER_JWT_ISSUER: rex-auth-service
+      USER_JWT_AUDIENCE: rex-platform
+      ROBOT_JWT_SECRET_KEY: test-robot-secret
+      ROBOT_JWT_ALGORITHM: HS256
+      ROBOT_ACCESS_TOKEN_EXPIRE_HOURS: 12
+      ROBOT_REFRESH_TOKEN_EXPIRE_DAYS: 30
+      MQTT_HOST: localhost
+      MQTT_PORT: 1883
+      MQTT_USERNAME: test
+      MQTT_PASSWORD: test
+      MQTT_TLS_ENABLED: false
+      KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+      KAFKA_CLIENT_ID: rex-robot-service-test
+      CONTROL_LEASE_EXPIRE_SECONDS: 10
+      JOYSTICK_COMMAND_TIMEOUT_MS: 500
+      MAX_WEBSOCKET_MESSAGES_PER_SECOND: 30
+      DEFAULT_HEARTBEAT_INTERVAL_SECONDS: 5
+      DEFAULT_HEARTBEAT_TIMEOUT_SECONDS: 20
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-
-      - name: Cache pip dependencies
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
+          python-version: "3.12"
+          cache: "pip"
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest pytest-cov httpx
-
-      - name: Run pytest
-        run: pytest tests/ -v --cov=app --cov-report=xml
-        env:
-          SQLALCHEMY_DATABASE_URI: "postgresql://test_user:test_pass@localhost:5432/test_identity_db"
-          ENVIRONMENT: testing
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
-        with:
-          files: ./coverage.xml
-          flags: unittests
-          name: codecov-umbrella
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run test suite
+        run: |
+          alembic upgrade head
+          pytest \
+            --cov=app \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --cov-fail-under=90
 
   build:
+    name: "6 · Build"
     runs-on: ubuntu-latest
-    needs: [lint, test]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    needs: [ lint, test ]
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      - name: Build Docker image
-        uses: docker/build-push-action@v4
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build Docker image (no push)
+        uses: docker/build-push-action@v5
         with:
           context: .
           push: false
-          tags: rex-identity-server:latest
+          tags: ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          outputs: type=docker
+
+  push:
+    name: "7 · Push"
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha,prefix=sha-
+            type=raw,value=latest
+            type=raw,value=main
+      - name: Build and push to GHCR
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
