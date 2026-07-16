@@ -1,5 +1,6 @@
-from datetime import datetime, timedelta, timezone
 import asyncio
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from app.models.robot import Robot
