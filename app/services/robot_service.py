@@ -1,171 +1,131 @@
-"""Robot management service"""
+import logging
+import re
+import uuid
 
-from typing import Optional, List
-from uuid import uuid4
-import hashlib
+from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.models.robot import Robot, RobotStatus
-from app.models.robot_ownership import RobotOwnership
-from app.schemas import RobotRegisterRequest, RobotPairRequest, RobotUpdate
-from app.services.event_service import event_service
+from app.models.robot import Robot
+from app.models.robot_configuration import RobotConfiguration
+from app.models.robot_event import RobotEvent
+from app.services.kafka_service import publish_kafka_event
+from app.utils.dates import utc_now_naive
+from app.utils.secrets import generate_random_secret, hash_secret
 
+logger = logging.getLogger(__name__)
 
-class RobotService:
-    """Service for robot management operations"""
+SERIAL_REGEX = re.compile(r"^REX-[A-Z0-9]+-[0-9]+$")
 
-    @staticmethod
-    def register_robot(
-        db: Session,
-        request: RobotRegisterRequest,
-    ) -> Robot:
-        """
-        Register a new robot in the system.
-        """
-        hashed_key = hashlib.sha256(request.serial_key.encode()).hexdigest()
+def validate_serial_number(serial: str):
+    """Validate that the serial number matches REX-[A-Z0-9]+-[0-9]+."""
+    if not SERIAL_REGEX.match(serial):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid serial number format. Must match 'REX-[MODEL]-[NUMBER]'"
+        )
 
-        # Check if serial key hash already exists
-        existing = db.query(Robot).filter(
-            Robot.serial_key_hash == hashed_key
-        ).first()
-        if existing:
-            raise ValueError("Serial key already registered")
-        
-        # Generate unique robot_id if not provided, but request doesn't have it in Grabber it's provided?
-        # Wait, in Rex the previous `register_robot` generated robot_id.
-        robot_id = f"REX-{uuid4().hex[:12].upper()}"
-        
-        robot = Robot(
-            robot_id=robot_id,
-            name=request.name,
-            model=request.model,
-            serial_key_hash=hashed_key,
-            firmware_version=request.firmware_version,
-            status=RobotStatus.ACTIVE,
+def register_robot(db: Session, serial_number: str, hardware_model: str, name: str) -> tuple[Robot, str]:
+    """Register/provision a new physical robot with a unique serial number."""
+    validate_serial_number(serial_number)
+    
+    # Check if serial number already exists
+    existing = db.query(Robot).filter(Robot.serial_number == serial_number).first()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Serial number already registered"
         )
         
-        db.add(robot)
-        db.commit()
-        db.refresh(robot)
-        
-        return robot
+    robot_id = str(uuid.uuid4())
+    raw_secret = generate_random_secret()
+    secret_hash = hash_secret(raw_secret)
+    
+    db_robot = Robot(
+        id=robot_id,
+        serial_number=serial_number,
+        hardware_model=hardware_model,
+        name=name,
+        device_secret_hash=secret_hash,
+        status="UNCLAIMED",
+        connection_status="OFFLINE",
+        current_mode="IDLE"
+    )
+    db.add(db_robot)
+    
+    # Create default configuration
+    db_config = RobotConfiguration(
+        robot_id=robot_id,
+        version=1,
+        base_max_speed=100,
+        base_default_speed=50,
+        turn_speed=50,
+        acceleration_step=5,
+        braking_step=10,
+        joystick_dead_zone=0.05,
+        joystick_timeout_ms=500,
+        obstacle_stop_distance_cm=20,
+        arm_base_min_angle=0,
+        arm_base_max_angle=180,
+        arm_shoulder_min_angle=0,
+        arm_shoulder_max_angle=180,
+        arm_elbow_min_angle=0,
+        arm_elbow_max_angle=180,
+        arm_grip_min_angle=0,
+        arm_grip_max_angle=180,
+        arm_default_speed=50,
+        heartbeat_interval_seconds=5,
+        heartbeat_timeout_seconds=20,
+        telemetry_interval_ms=1000,
+        buzzer_enabled=True,
+        oled_eyes_enabled=True,
+        automatic_night_light=True
+    )
+    db.add(db_config)
+    
+    # Log event
+    db_event = RobotEvent(
+        robot_id=robot_id,
+        event_type="robot_registered",
+        severity="INFO",
+        message=f"Robot registered successfully with serial: {serial_number}"
+    )
+    db.add(db_event)
+    
+    db.commit()
+    db.refresh(db_robot)
+    
+    # Publish Kafka event
+    # Need to run in background or execute asynchronously
+    import asyncio
+    asyncio.create_task(publish_kafka_event(
+        topic="rex.robot.registered.v1",
+        event_type="robot_registered",
+        payload={
+            "robot": {
+                "id": db_robot.id,
+                "serial_number": db_robot.serial_number,
+                "status": db_robot.status
+            }
+        }
+    ))
+    
+    return db_robot, raw_secret
 
-    @staticmethod
-    def pair_robot(db: Session, request: RobotPairRequest) -> Robot:
-        """
-        Pair a robot to a user.
-        """
-        # Check if robot exists
-        robot = RobotService.get_robot_by_id(db, request.robot_id)
-        if not robot:
-            raise ValueError("Robot not found")
-            
-        hashed_pair_key = hashlib.sha256(request.serial_key.encode()).hexdigest()
-        if robot.serial_key_hash != hashed_pair_key:
-            raise ValueError("Invalid serial key")
-            
-        # Check if already paired
-        ownership = db.query(RobotOwnership).filter(
-            RobotOwnership.robot_id == robot.id
-        ).first()
-        
-        if ownership:
-            raise ValueError("Robot is already paired")
-            
-        new_ownership = RobotOwnership(
-            robot_id=robot.id,
-            user_id=request.user_id,
-            role="OWNER"
-        )
-        db.add(new_ownership)
-        db.commit()
-        
-        event_service.log_event(db, robot.id, "ROBOT_PAIRED", {"user_id": request.user_id})
-        
-        return robot
+def get_robot_by_id(db: Session, robot_id: str) -> Robot | None:
+    return db.query(Robot).filter(Robot.id == robot_id).first()
 
-    @staticmethod
-    def get_my_robots(db: Session, user_id: str) -> List[Robot]:
-        """Get all robots owned by a user"""
-        return db.query(Robot).join(RobotOwnership).filter(
-            RobotOwnership.user_id == user_id
-        ).all()
+def get_user_robots(db: Session, user_id: str) -> list[Robot]:
+    return db.query(Robot).filter(Robot.owner_user_id == user_id).all()
 
-    @staticmethod
-    def get_robot_by_id(db: Session, robot_identifier: str) -> Optional[Robot]:
-        """
-        Get robot by robot_id or database id.
-        """
-        # Try to match robot_id (string identifier)
-        robot = db.query(Robot).filter(Robot.robot_id == robot_identifier).first()
-        if robot:
-            return robot
+def update_robot_profile(db: Session, robot: Robot, name: str | None, description: str | None, location_label: str | None) -> Robot:
+    if name is not None:
+        robot.name = name
+    if description is not None:
+        robot.description = description
+    if location_label is not None:
+        robot.location_label = location_label
         
-        # Try to match by numeric ID
-        try:
-            robot_db_id = int(robot_identifier)
-            robot = db.query(Robot).filter(Robot.id == robot_db_id).first()
-            return robot
-        except (ValueError, TypeError):
-            pass
-        
-        return None
-
-    @staticmethod
-    def get_robot(db: Session, user_id: str, robot_identifier: str) -> Robot:
-        """Get a specific robot ensuring ownership"""
-        robot = RobotService.get_robot_by_id(db, robot_identifier)
-        if not robot:
-            raise ValueError("Robot not found")
-            
-        RobotService._check_ownership(db, user_id, robot.id)
-        return robot
-
-    @staticmethod
-    def update_robot(db: Session, user_id: str, robot_identifier: str, update_data: RobotUpdate) -> Robot:
-        """Update robot details"""
-        robot = RobotService.get_robot_by_id(db, robot_identifier)
-        if not robot:
-            raise ValueError("Robot not found")
-            
-        RobotService._check_ownership(db, user_id, robot.id)
-        
-        if update_data.name is not None:
-            robot.name = update_data.name
-            
-        db.add(robot)
-        db.commit()
-        db.refresh(robot)
-        return robot
-
-    @staticmethod
-    def unpair_robot(db: Session, user_id: str, robot_identifier: str):
-        """Unpair a robot from a user"""
-        robot = RobotService.get_robot_by_id(db, robot_identifier)
-        if not robot:
-            raise ValueError("Robot not found")
-            
-        ownership = RobotService._check_ownership(db, user_id, robot.id)
-        
-        db.delete(ownership)
-        db.commit()
-        
-        event_service.log_event(db, robot.id, "ROBOT_UNPAIRED", {"user_id": user_id})
-
-    @staticmethod
-    def _check_ownership(db: Session, user_id: str, robot_db_id: int) -> RobotOwnership:
-        """Check if user owns the robot"""
-        ownership = db.query(RobotOwnership).filter(
-            RobotOwnership.robot_id == robot_db_id,
-            RobotOwnership.user_id == user_id
-        ).first()
-        
-        if not ownership:
-            raise ValueError("Not authorized to access this robot")
-            
-        return ownership
-
-    @staticmethod
-    def list_robots(db: Session, skip: int = 0, limit: int = 100) -> List[Robot]:
-        """List all robots with pagination"""
-        return db.query(Robot).offset(skip).limit(limit).all()
+    robot.updated_at = utc_now_naive()
+    db.commit()
+    db.refresh(robot)
+    return robot
