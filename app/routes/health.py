@@ -1,24 +1,22 @@
-"""Health check endpoint"""
+from fastapi import APIRouter, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from fastapi import APIRouter
-from app.utils import success_response
+router = APIRouter(prefix="/health", tags=["Health"])
 
-router = APIRouter(prefix="/health", tags=["health"])
-
-
-@router.get("/")
-async def health_check():
-    """Health check endpoint"""
-    return success_response(
-        data={"status": "healthy", "service": "rex-identity-server"},
-        message="Service is healthy",
-    )
-
+@router.get("/live")
+async def get_live():
+    """Liveness probe."""
+    return {"status": "ok"}
 
 @router.get("/ready")
-async def readiness_check():
-    """Readiness check endpoint"""
-    return success_response(
-        data={"ready": True},
-        message="Service is ready",
-    )
+async def get_ready():
+    """Readiness probe."""
+    # Could check DB/Redis connectivity if desired, keeping it simple
+    return {"status": "ready"}
+
+metrics_router = APIRouter(tags=["Metrics"])
+
+@metrics_router.get("/metrics")
+async def get_metrics():
+    """Prometheus metrics handler."""
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
