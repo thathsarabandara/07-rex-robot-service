@@ -1,4 +1,8 @@
 import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -91,9 +95,11 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engin
 
 # Eagerly override redis and database before any import loads them into local namespace
 import app.config.redis
+
 app.config.redis.redis_client = mock_redis_instance
 
 import app.config.database
+
 app.config.database.SessionLocal = TestingSessionLocal
 app.config.database.engine = engine
 
@@ -103,6 +109,7 @@ from app.config.settings import settings
 from app.main import app as fastapi_app
 from app.services.kafka_service import test_events
 from app.services.mqtt_service import test_publications
+
 
 @pytest.fixture(autouse=True)
 def mock_redis():
