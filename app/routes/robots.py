@@ -1,115 +1,71 @@
-"""Robot management endpoints"""
-
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
-from app.database import get_db
-from app.schemas import (
-    RobotRegisterRequest, 
-    RobotResponse, 
-    RobotPairRequest, 
-    RobotUpdate, 
-    SuccessResponse
+from app.config.database import get_db
+from app.middleware.auth import get_current_user_id
+from app.schemas.robot import (
+    RobotProfileUpdateRequest,
+    RobotRegisterRequest,
+    RobotRegisterResponse,
+    RobotResponse,
 )
-from app.services.robot_service import RobotService
+from app.services.robot_service import get_user_robots, register_robot, update_robot_profile
+from app.utils.ownership import verify_robot_ownership
 
-router = APIRouter(prefix="/robots", tags=["robots"])
+router = APIRouter(prefix="/robots", tags=["Robots"])
 
-@router.post("/register", response_model=RobotResponse, status_code=201)
-async def register_robot(
-    request: RobotRegisterRequest,
-    db: Session = Depends(get_db),
+@router.post("/register", response_model=RobotRegisterResponse, status_code=status.HTTP_201_CREATED)
+async def register(
+    request: RobotRegisterRequest, 
+    user_id: str = Depends(get_current_user_id), 
+    db: Session = Depends(get_db)
 ):
-    """Register a new robot in the system"""
-    try:
-        robot = RobotService.register_robot(db, request)
-        return robot
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
+    """Register/provision a new physical robot device."""
+    robot, raw_secret = register_robot(
+        db=db,
+        serial_number=request.serial_number,
+        hardware_model=request.hardware_model,
+        name=request.name
+    )
+    return {
+        "robot_id": robot.id,
+        "robot_secret": raw_secret,
+        "serial_number": robot.serial_number,
+        "status": robot.status
+    }
 
-@router.post("/pair", response_model=SuccessResponse, status_code=200)
-async def pair_robot(
-    request: RobotPairRequest,
-    db: Session = Depends(get_db),
-):
-    """Pair a robot for a user"""
-    try:
-        RobotService.pair_robot(db, request)
-        return SuccessResponse(success=True)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/my", response_model=List[RobotResponse])
-async def get_my_robots(
-    x_user_id: str = Header(..., description="User ID"),
-    db: Session = Depends(get_db),
-):
-    """List all robots owned by the user"""
-    try:
-        robots = RobotService.get_my_robots(db, x_user_id)
-        return robots
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/{robot_identifier}", response_model=RobotResponse)
-async def get_robot(
-    robot_identifier: str,
-    x_user_id: str = Header(..., description="User ID"),
-    db: Session = Depends(get_db),
-):
-    """Get robot details ensuring ownership"""
-    try:
-        robot = RobotService.get_robot(db, x_user_id, robot_identifier)
-        return robot
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.patch("/{robot_identifier}", response_model=RobotResponse)
-async def update_robot(
-    robot_identifier: str,
-    update_data: RobotUpdate,
-    x_user_id: str = Header(..., description="User ID"),
-    db: Session = Depends(get_db),
-):
-    """Update robot details"""
-    try:
-        robot = RobotService.update_robot(db, x_user_id, robot_identifier, update_data)
-        return robot
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.delete("/{robot_identifier}", status_code=204)
-async def unpair_robot(
-    robot_identifier: str,
-    x_user_id: str = Header(..., description="User ID"),
-    db: Session = Depends(get_db),
-):
-    """Unpair a robot from a user"""
-    try:
-        RobotService.unpair_robot(db, x_user_id, robot_identifier)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("", response_model=List[RobotResponse])
+@router.get("", response_model=list[RobotResponse])
 async def list_robots(
-    skip: int = 0,
-    limit: int = 100,
-    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id), 
+    db: Session = Depends(get_db)
 ):
-    """List all registered robots (Admin/Internal use)"""
-    if skip < 0 or limit <= 0 or limit > 1000:
-        raise HTTPException(status_code=400, detail="Invalid pagination parameters")
-    
-    robots = RobotService.list_robots(db, skip, limit)
-    return robots
+    """List robots claimed/owned by the authenticated user."""
+    return get_user_robots(db, user_id)
+
+@router.get("/{robot_id}", response_model=RobotResponse)
+async def get_robot(
+    robot_id: str, 
+    user_id: str = Depends(get_current_user_id), 
+    db: Session = Depends(get_db)
+):
+    """Retrieve details of a specific owned robot."""
+    robot = verify_robot_ownership(db, robot_id, user_id)
+    return robot
+
+@router.patch("/{robot_id}", response_model=RobotResponse)
+async def patch_robot(
+    robot_id: str,
+    request: RobotProfileUpdateRequest,
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db)
+):
+    """Update name, description, or location label of a claimed robot."""
+    robot = verify_robot_ownership(db, robot_id, user_id)
+    updated = update_robot_profile(
+        db=db,
+        robot=robot,
+        name=request.name,
+        description=request.description,
+        location_label=request.location_label
+    )
+    return updated
