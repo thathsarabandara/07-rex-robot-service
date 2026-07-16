@@ -1,94 +1,139 @@
-"""FastAPI Application Factory"""
-
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+import asyncio
 import logging
+from contextlib import asynccontextmanager
 
-from app.config import get_settings
-from app.database import Base, engine
-from app.routes import (
-    health_router,
-    robots_router,
-)
+from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
+from app.config.database import Base, engine
+from app.config.kafka import close_kafka, init_kafka
+from app.config.settings import settings
+from app.middleware.error_handler import exception_handler
+from app.middleware.request_id import RequestIDMiddleware
+from app.routes.claim import router as claim_router
+from app.routes.configuration import router as configuration_router
+from app.routes.control_lease import router as control_lease_router
+from app.routes.device_auth import router as device_auth_router
+from app.routes.emergency import router as emergency_router
+from app.routes.events import router as events_router
+from app.routes.health import metrics_router
+
+# Import Routers
+from app.routes.health import router as health_router
+from app.routes.modes import router as modes_router
+from app.routes.robots import router as robots_router
+from app.routes.websockets import router as websockets_router
+from app.services.mqtt_service import close_mqtt_client, init_mqtt_client
+from app.workers.expired_command_worker import expired_commands_loop
+from app.workers.heartbeat_monitor import monitor_heartbeats_loop
+from app.workers.mqtt_consumer import run_mqtt_consumer
+
+# Setup logger
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-settings = get_settings()
+# Track tasks to cancel them on shutdown
+background_tasks: set[asyncio.Task] = set()
 
-
-# Lifespan context manager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """FastAPI lifespan context manager"""
-    # Startup
-    logger.info("Starting up REX Identity Server...")
-    Base.metadata.create_all(bind=engine)
-    logger.info("Database tables initialized")
+    """FastAPI Lifespan events for starting/stopping background workers and connections."""
+    logger.info("Initializing REX Robot Service application startup...")
+    
+    # Ensure MySQL tables exist (development/resilience fallback, Alembic manages migrations)
+    if settings.APP_ENV != "test":
+        try:
+            Base.metadata.create_all(bind=engine)
+            logger.info("Database tables verified/created successfully.")
+        except Exception as e:
+            logger.error(f"Error checking/creating database tables: {e}")
+            
+    # Connect external services
+    await init_mqtt_client()
+    await init_kafka()
+    
+    # Spawn background worker loops
+    if settings.APP_ENV != "test":
+        task_mqtt = asyncio.create_task(run_mqtt_consumer())
+        task_heartbeat = asyncio.create_task(monitor_heartbeats_loop())
+        task_expired = asyncio.create_task(expired_commands_loop())
+        
+        background_tasks.add(task_mqtt)
+        background_tasks.add(task_heartbeat)
+        background_tasks.add(task_expired)
+        
     yield
-    # Shutdown
-    logger.info("Shutting down REX Identity Server...")
-
+    
+    # Shutdown events
+    logger.info("Shutting down REX Robot Service application...")
+    
+    # Cancel background tasks
+    for task in background_tasks:
+        task.cancel()
+        
+    if background_tasks:
+        await asyncio.gather(*background_tasks, return_exceptions=True)
+        
+    # Close connections
+    await close_mqtt_client()
+    await close_kafka()
+    logger.info("Service shutdown completed successfully.")
 
 def create_app() -> FastAPI:
-    """Create and configure FastAPI application"""
-    
+    """FastAPI App Factory setup."""
     app = FastAPI(
-        title=settings.api_title,
-        description="Robot Identity and Device Authentication Server for IoT",
-        version=settings.api_version,
+        title=settings.APP_NAME,
+        description="FastAPI Robot management and manual command routing service gateway.",
+        version="1.0.0",
         docs_url="/api/docs",
         redoc_url="/api/redoc",
         openapi_url="/api/openapi.json",
-        lifespan=lifespan,
+        lifespan=lifespan
     )
     
-    # Add CORS middleware
+    # Add CORS
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.cors_origins,
+        allow_origins=["*"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
     
-    # Include routers
-    app.include_router(health_router, prefix="/api")
-    app.include_router(robots_router, prefix="/api")
+    # Request ID middleware
+    app.add_middleware(RequestIDMiddleware)
     
-    import os
-    from fastapi import Request
-    if os.getenv("ENV") == "dev" or os.getenv("NODE_ENV") == "development":
-        @app.middleware("http")
-        async def log_requests(request: Request, call_next):
-            logger.info(f"API Call: {request.method} {request.url}")
-            response = await call_next(request)
-            return response
+    # Exception Handler registrations
+    app.add_exception_handler(RequestValidationError, exception_handler)
+    app.add_exception_handler(StarletteHTTPException, exception_handler)
+    app.add_exception_handler(Exception, exception_handler)
     
-    # Root endpoint
-    @app.get("/")
-    async def root():
-        """Root endpoint"""
-        return {
-            "service": settings.app_name,
-            "version": settings.app_version,
-            "status": "running",
-            "docs": "/api/docs",
-        }
+    # Register REST and WS routers
+    FastAPI() # Secondary app or nested APIRouter mapping /api/v1
+    
+    app.include_router(health_router, prefix="/api/v1")
+    app.include_router(metrics_router, prefix="/api/v1")
+    app.include_router(robots_router, prefix="/api/v1")
+    app.include_router(claim_router, prefix="/api/v1")
+    app.include_router(device_auth_router, prefix="/api/v1")
+    app.include_router(configuration_router, prefix="/api/v1")
+    app.include_router(modes_router, prefix="/api/v1")
+    app.include_router(emergency_router, prefix="/api/v1")
+    app.include_router(control_lease_router, prefix="/api/v1")
+    app.include_router(events_router, prefix="/api/v1")
+    app.include_router(websockets_router, prefix="/api/v1")
     
     return app
 
-
-# Create app instance
 app = create_app()
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
         "app.main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=settings.debug,
+        host=settings.APP_HOST,
+        port=settings.APP_PORT,
+        reload=settings.DEBUG
     )
