@@ -1,15 +1,15 @@
-"""Model __init__ file"""
-
-from app.models.robot import (
-    Robot,
-    RobotStatus,
-)
-from app.models.robot_ownership import RobotOwnership
+from app.config.database import Base
+from app.models.device_session import RobotDeviceSession
+from app.models.robot import Robot
+from app.models.robot_command import RobotCommand
+from app.models.robot_configuration import RobotConfiguration
 from app.models.robot_event import RobotEvent
 
 __all__ = [
+    "Base",
     "Robot",
-    "RobotStatus",
-    "RobotOwnership",
-    "RobotEvent",
+    "RobotConfiguration",
+    "RobotDeviceSession",
+    "RobotCommand",
+    "RobotEvent"
 ]

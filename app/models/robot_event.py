@@ -1,32 +1,35 @@
-"""Robot Event model definition"""
+from __future__ import annotations
 
-from enum import Enum as PyEnum
-from sqlalchemy import Column, String, Enum, DateTime, JSON, ForeignKey, func
-from sqlalchemy.orm import relationship
+import uuid
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
-from app.database import Base
+from sqlalchemy import JSON, DateTime, ForeignKey, String
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.config.database import Base
+
+if TYPE_CHECKING:
+    from app.models.robot import Robot
 
 
-class EventSeverity(str, PyEnum):
-    LOW = "LOW"
-    MEDIUM = "MEDIUM"
-    HIGH = "HIGH"
-    CRITICAL = "CRITICAL"
-
+def utc_now_naive():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 class RobotEvent(Base):
-    """Event logs emitted or received for a robot"""
     __tablename__ = "robot_events"
 
-    id = Column(String(36), primary_key=True)
-    robot_id = Column(String(36), ForeignKey("robots.id", ondelete="CASCADE"), nullable=False, index=True)
-    event_type = Column(String(100), nullable=False)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    robot_id: Mapped[str] = mapped_column(String(36), ForeignKey("robots.id", ondelete="CASCADE"), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False)
     
-    severity = Column(Enum(EventSeverity), default=EventSeverity.LOW, nullable=False)
-    source = Column(String(100), nullable=True)
-    payload = Column(JSON, nullable=True)
+    # INFO, WARNING, CRITICAL
+    severity: Mapped[str] = mapped_column(String(50), default="INFO", nullable=False)
+    message: Mapped[str] = mapped_column(String(255), nullable=False)
+    metadata_json: Mapped[dict | list | None] = mapped_column(JSON, name="metadata", nullable=True)
     
-    created_at = Column(DateTime, default=func.now(), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now_naive, nullable=False)
 
     # Relationships
-    robot = relationship("Robot", back_populates="events")
+    robot: Mapped["Robot"] = relationship("Robot", back_populates="events")
