@@ -132,7 +132,7 @@ async def ws_control(
         return
         
     user_id, robot = auth
-    connection_id = str(uuid.uuid4()) if hasattr(websocket, "id") else f"conn_{id(websocket)}"
+    connection_id = str(uuid.uuid4())
     
     await manager.connect(robot_id, websocket)
     
@@ -196,6 +196,7 @@ async def ws_control(
                 
             # Enforce Control Lease check
             lease = await get_control_lease_status(robot_id)
+            print("DEBUG: connection_id=", connection_id, "lease=", lease)
             if not lease or lease.get("connection_id") != connection_id:
                 db.close()
                 await websocket.send_json({"error": "Command rejected: Active lease not held by this connection"})

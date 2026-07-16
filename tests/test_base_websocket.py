@@ -160,7 +160,7 @@ def test_websocket_control_commands(client, generate_user_jwt, db, mock_redis):
     fixed_uuid = uuid.UUID("11111111-1111-1111-1111-111111111111")
     uuid_sequence = [fixed_uuid, uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), uuid.uuid4()]
     
-    with patch("uuid.uuid4", side_effect=uuid_sequence), \
+    with patch("app.routes.websockets.uuid.uuid4", return_value=fixed_uuid), \
          patch("app.routes.websockets.get_control_lease_status") as mock_lease, \
          patch("app.routes.websockets.acquire_control_lease", return_value=True):
          
@@ -190,12 +190,6 @@ def test_websocket_control_commands(client, generate_user_jwt, db, mock_redis):
             import time
             time.sleep(0.1)
             
-            # Debug what was received
-            try:
-                print("WS RECEIVED:", websocket.receive_json())
-            except Exception as e:
-                print("WS RECEIVE ERROR:", e)
-                
             assert len(test_publications) == 1
             assert test_publications[0][0] == f"rex/robots/{robot_id}/commands/base"
             assert test_publications[0][1]["x"] == 0.5
