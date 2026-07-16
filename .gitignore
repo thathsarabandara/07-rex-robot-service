@@ -1,56 +1,33 @@
-# Virtual environments
-.venv/
-myenv/
-venv/
-env/
-ENV/
-.env
-
-# Python
 __pycache__/
 *.py[cod]
-*$py.class
 *.so
-.Python
-*.egg-info/
+
+.venv/
+venv/
+
+.env
+.env.local
+.env.test
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
 dist/
 build/
+*.egg-info/
 
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-
-# IDE
-.vscode/
 .idea/
-*.swp
-*.swo
-*~
+.vscode/
 .DS_Store
 
-# Database
-*.db
-*.sqlite
-*.sqlite3
-
-# Logs
 *.log
 logs/
 
-# MyPy
-.mypy_cache/
-.dmypy.json
-dmypy.json
+alembic/__pycache__/
+migrations/__pycache__/
 
-# IDEs
-*.sublime-project
-*.sublime-workspace
-
-# OS
-.DS_Store
-Thumbs.db
-
-
-*env
+robotenv
